@@ -1,0 +1,7 @@
+/target/
+*.profraw
+*.profdata
+
+# Override global gitignore to include template files
+!lefthook.yml
+!.claude/settings.local.json

@@ -1,0 +1,13 @@
+[package]
+name = "project-name"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "TODO: project description"
+repository = "https://github.com/kawaz/project-name"
+keywords = []
+categories = []
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
