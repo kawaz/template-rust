@@ -8,14 +8,6 @@ default:
 fmt:
     cargo fmt
 
-# フォーマットチェック
-fmt-check:
-    cargo fmt --all -- --check
-
-# lint
-lint:
-    cargo clippy --all-targets --all-features -- -D warnings
-
 # lint + format チェック
 check:
     cargo fmt --check
