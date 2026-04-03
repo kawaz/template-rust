@@ -2,13 +2,38 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
-
-permissions:
-  contents: write
+    branches: [main]
+    paths:
+      - "Cargo.toml"
 
 jobs:
-  build:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.current }}
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check version change
+        id: version
+        run: |
+          CURRENT_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if gh release view "v${CURRENT_VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged: v${CURRENT_VERSION} already released"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "New version detected: v${CURRENT_VERSION}"
+          fi
+          echo "current=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build-release:
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
@@ -17,21 +42,31 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             cross: true
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
-    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-musl') && !matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Install cross
         if: matrix.cross
-        uses: taiki-e/install-action@cross
+        run: cargo install cross --locked
 
       - name: Build
         run: |
@@ -44,25 +79,33 @@ jobs:
       - name: Package
         run: |
           BINARY_NAME=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name')
-          ARCHIVE="${BINARY_NAME}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          ARCHIVE="${BINARY_NAME}-${{ matrix.target }}.tar.gz"
           tar czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" "$BINARY_NAME"
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
-  release:
-    needs: build
+  publish-release:
+    needs: [check-version, build-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" *.tar.gz --repo "${{ github.repository }}" --generate-notes
+          VERSION: ${{ needs.check-version.outputs.version }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          gh release create "v${VERSION}" \
+            *.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "v${VERSION}" \
+            --target "$COMMIT_SHA" \
+            --generate-notes

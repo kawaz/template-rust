@@ -6,22 +6,27 @@
 
 ```bash
 just fmt        # フォーマット
-just lint       # clippy
+just check      # fmt-check + clippy
 just test       # テスト
-just check      # CI 相当（fmt-check + lint + test）
 just build      # リリースビルド
-just release    # リリース手順
+just push       # check + test してから push
+just ci         # CI 相当（check + test + build）
+just release    # リリース（version bump + CHANGELOG + push）
 ```
 
 ## Structure
 
 ```
-src/             # ソースコード
+src/                # ソースコード
 .github/workflows/  # CI/CD
+  ci.yml            # テスト（push/PR）
+  release.yml       # リリース（Cargo.toml version 変更トリガー）
 ```
 
 ## Guidelines
 
 - コミットメッセージ: Conventional Commits (feat:, fix:, chore:, docs:, refactor:)
 - テストファースト開発
-- `cargo clippy -- -D warnings` を通すこと
+- `just check` を通してから push
+- push は `just push` を使う（直接 push は hook でブロック）
+- リリースは `just release` で自動化

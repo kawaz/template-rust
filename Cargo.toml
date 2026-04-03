@@ -11,3 +11,8 @@ categories = []
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

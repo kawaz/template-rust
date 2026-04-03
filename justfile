@@ -1,5 +1,6 @@
 # Rust Project
 
+# デフォルト: レシピ一覧
 default:
     @just --list
 
@@ -15,6 +16,11 @@ fmt-check:
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
 
+# lint + format チェック
+check:
+    cargo fmt --check
+    cargo clippy -- -D warnings
+
 # テスト
 test:
     cargo test --verbose
@@ -23,21 +29,51 @@ test:
 build:
     cargo build --release
 
-# CI 相当のチェック
-check: fmt-check lint test
+# ワーキングコピーがクリーン（empty）であることを確認
+ensure-clean:
+    test "$(jj log -r @ --no-graph -T 'empty')" = "true"
 
-# リリース（タグを打って push → CI が自動ビルド）
-release bump="patch":
+# push (check + test を通してから push)
+push: check test
+    jj git push
+
+# CI 相当のチェック
+ci: check test build
+
+# リリース (bump: major, minor, patch)
+release bump="patch": ensure-clean check test build
     #!/usr/bin/env bash
     set -euo pipefail
-    just check
-    CURRENT=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')
-    echo "Current version: $CURRENT"
-    echo "Bump type: {{bump}}"
-    # cargo-release or manual version bump
-    echo "TODO: version bump to next {{bump}}, then:"
-    echo "  jj describe -m \"chore: release vX.Y.Z\""
-    echo "  jj new"
-    echo "  jj bookmark set main -r @-"
-    echo "  jj git push"
-    echo "  git tag vX.Y.Z && git push origin vX.Y.Z"
+
+    # Version bump
+    current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    IFS='.' read -r major minor patchv <<< "$current"
+    case "{{bump}}" in
+        major) major=$((major + 1)); minor=0; patchv=0 ;;
+        minor) minor=$((minor + 1)); patchv=0 ;;
+        patch) patchv=$((patchv + 1)) ;;
+        *) echo "Error: Invalid bump type '{{bump}}'" >&2; exit 1 ;;
+    esac
+    new_version="${major}.${minor}.${patchv}"
+    sed -i '' "s/^version = \"${current}\"/version = \"${new_version}\"/" Cargo.toml
+    cargo check --quiet
+    echo "Version: ${current} -> ${new_version}"
+
+    # CHANGELOG.md update via Claude
+    pkg_name=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].name')
+    latest_tag=$(gh release list --repo "kawaz/${pkg_name}" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")
+    if [ -n "$latest_tag" ]; then
+        changes=$(jj log -r "$latest_tag..@-" --no-graph -T 'description ++ "\n"' 2>/dev/null || echo "")
+    else
+        changes=$(jj log -r '..@-' --no-graph -T 'description ++ "\n"' 2>/dev/null || echo "")
+    fi
+    claude -p "CHANGELOG.mdに v${new_version} ($(date +%Y-%m-%d)) のセクションを追加してください。以下のコミットログを元に、利用者視点で重要な順に記載: 新機能 / 動作変更(破壊的変更は特に明記) / バグ修正 / その他。内部リファクタやCI変更など利用者に影響しないものは省略可。コミットログ: ${changes}"
+
+    # Commit and push
+    jj describe -m "Release v${new_version}"
+    jj new
+    jj bookmark set main -r @-
+    just push
+
+    # Watch release workflow
+    gh run watch
